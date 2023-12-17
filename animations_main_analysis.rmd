@@ -1,0 +1,764 @@
+---
+title: "Results"
+shorttitle: "Dopamine challenge reduces mental state attribution accuracy"
+authornote: 
+author: 
+  - name         : "Bianca Schuster"
+    affiliation  : "1" 
+    email        : "bianca.schuster@univie.ac.at"
+    corresponding: yes
+    address: "Liebiggasse 5, 1010 Vienna, Austria"
+affiliation      :
+date: "Last compiled on `r Sys.time()`"
+output: 
+ papaja::apa6_docx
+bibliography: ["markdown_bib.bib"]
+editor_options: 
+  chunk_output_type: console
+nocite: 
+linenumbers: yes
+linkcolor: "blue"
+# knit: (function(inputFile, encoding) {
+#     rmarkdown::render(inputFile, encoding = encoding, output_dir = here::here())
+#         })
+header-includes:
+  - |
+    \makeatletter
+    \renewcommand{\paragraph}{\@startsection{paragraph}{4}{\parindent}%
+      {0\baselineskip \@plus 0.2ex \@minus 0.2ex}%
+      {-1em}%
+      {\normalfont\normalsize\bfseries\typesectitle}}
+      {0\baselineskip \@plus 0.2ex \@minus 0.2ex}%
+      {-\z@\relax}%
+      {\normalfont\normalsize\bfseries\itshape\hspace{\parindent}{#1}\textit{\addperi}}{\relax}}
+
+csl: "`r system.file('rmd', 'apa7.csl', package = 'papaja')`"
+documentclass: "apa7"
+quote_labels: yes
+---
+
+```{r setup, include = FALSE, echo = FALSE, warning = FALSE}
+
+# clear all objects including hidden objects
+rm(list = ls(all.names = TRUE))
+
+# load packages
+#-------------------------------------------------------------------------------
+
+# check if required packages are installed, if not install
+list.of.packages <- c("here", "Select", "broom", "tidyverse", "RColorBrewer", "ggrain", "ggmcmc", "ggthemes",
+                      "ggpubr", "patchwork", "brms", "rstan", "afex", "sjmisc", "sjmisc", "summarytools",
+                      "performance")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+# load libraries
+library(here)         # for relative file paths
+library(Select)       # for filtering / dropping of variables
+library(broom)        # for tidy model output (as tibbles)
+library(tidyverse)    # for data wrangling and visualisation. Attaches packages tibble, dplyr, readr, tidyr, ggplot2
+library(RColorBrewer) # for nice plotting colours
+library(ggrain)       # for raincloud plots
+library(ggmcmc)       # for easy plotting of MCMC diagnostics (e.g., caterpillar plots)
+library(ggthemes)     # for easier plot set up
+library(ggpubr)       # for publication-ready plots
+library(patchwork)    # for neat grouping of figures
+library(brms)         # for bayesian mixed effects models
+library(rstan)        # stan code for building brms models
+library(afex)         # for specifying ANOVA functions in frequentist linear models
+library(sjmisc)       # more data transformation options (e.g., 'dicho' function)
+library(summarytools) # for data summary & descriptives
+library(performance)  # for checks such as for multicollinearity, overdispersion, etc.
+remotes::install_github("n-kall/priorsense")
+library(priorsense) # for prior sensitivity analyses
+
+# set seed
+set.seed(123)
+
+# set working directory
+wd = here()
+setwd(wd) # sets working directory to current working directory 
+
+# plot settings
+#-------------------------------------------------------------------------------
+
+# set plotting theme for entire session
+theme_set(theme_minimal(base_size = 15))
+
+# set colour palette - use R color brewer
+display.brewer.all() # show palette
+pal1 <- brewer.pal(8,"Accent")
+# and Wes Anderson 
+library(wesanderson)
+names(wes_palettes)
+pal2 <- wes_palette("Royal2")
+
+colours = c(pal1[2], pal2[5])
+
+
+## R Markdown
+```
+
+```{r load-data, include = FALSE, echo = FALSE, warning = FALSE}
+
+mainDat <- read_csv("main_data.csv") # created on 21/07/2023
+
+view(dfSummary(mainDat))
+
+mainDat[mainDat == 'NaN'] <- NA # for some reason brms adds NaNs as factor levels - replace with NA
+
+# define nominal variables as factors
+mainDat <- mainDat%>%
+  mutate(sub = as.factor(as.character(subs)))%>%
+  mutate(drug = as.factor(as.character(drug)))%>% # drug is default treatment coded: 1 = reference level (i.e., placebo)
+  mutate(animID = as.factor(as.character(vidIDs)))%>%
+  mutate(cond = as.factor(as.character(condition)))%>% # 1 = surprising, 2 = seducing, 3 = following, 4 = fighting
+  mutate(drugDay = as.factor(as.character(drugDay)))%>%
+  mutate(mentSt = as.factor(mentalState))
+
+# create working memory (WM) groups by median split
+mainDat$VWMacc_d <- dicho(mainDat$baselVWM, dich.by = "median")
+# define custom contrast for WM group
+contrasts(mainDat$VWMacc_d) = contr.sum(2) # baseline WM
+
+
+# normalize all continuous predictors
+#-------------------------------------------------------------------------------
+mainDat <- mainDat%>%
+  mutate(OwnStimDiff_jerk = scale(ownStimDiff_jrk, scale = TRUE, center = TRUE))%>%
+  mutate(PLAownStimDiff_jerk = scale(PLAownStimDiff_jrk, scale = TRUE, center = TRUE))%>%
+  mutate(VWMacc = scale(baselVWM, scale = TRUE, center = TRUE))
+
+
+# create main objects for storing results in
+#-------------------------------------------------------------------------------
+anim.main = list()
+post = list()
+model_fixef = list()
+post = list()
+anim.contr = list()
+
+```
+
+```{r model1, echo=FALSE, cache=TRUE, include=FALSE, warning=FALSE}
+
+prior2 <- c(set_prior("normal(0,2)", class = "b"), # sets all coefficient priors
+            set_prior("normal(0,2)", class = "Intercept"),
+            set_prior("cauchy(0,5)", class = "sd"), 
+            set_prior("cauchy(0,5)", class = "sigma"))
+
+# model 1.1
+#-------------------------------------------------------------------------------
+anim.main$m1.1 <- brm(formula = accuracy  ~ drug +
+                      (1+drug||sub) + 
+                      (1|animID),
+                    data = mainDat, 
+                    family = gaussian(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .97),
+                    prior = prior2,
+                    save_pars = save_pars(all = TRUE))
+
+anim.main$m1.1 <- add_criterion(anim.main$m1.1, c("loo", "waic"))
+
+model_fixef$m1.1.drug <- fixef(anim.main$m1.1, pars = "drug2")
+
+# get posterior probabilities of winning model
+
+# summarize posteriors to get parameter names
+(draws_fit <- as_draws_array(anim.main$m1.1))
+posterior::summarize_draws(draws_fit) 
+
+post$m1.1_1 <- as_draws_array(anim.main$m1.1, variable = "b_drug2")
+post_drug <- mean(post$m1.1_1<0)
+
+# model 1.2
+#-------------------------------------------------------------------------------
+anim.main$m1.2 <- brm(formula = accuracy  ~ drug*mentSt +
+                      (1+drug||sub) + 
+                      (1|animID),
+                    data = mainDat, 
+                    family = gaussian(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .97),
+                    prior = prior2,
+                    save_pars = save_pars(all = TRUE))
+
+anim.main$m1.2 <- add_criterion(anim.main$m1.2, c("loo", "waic"))
+
+model_fixef$m1.2.drug <- fixef(anim.main$m1.2, pars = "drug2")
+model_fixef$m1.2.mentSt <- fixef(anim.main$m1.2, pars = "mentSt1")
+model_fixef$m1.2.drugXmentSt <- fixef(anim.main$m1.2, pars = "drug2:mentSt1")
+
+# compare models
+LOO(anim.main$m1.1, anim.main$m1.2)
+model_weights(anim.main$m1.1, anim.main$m1.2)
+
+post$m1.2_1 <- as_draws_array(anim.main$m1.2, variable = "b_drug2")
+post_drug <- mean(post$m1.2_1<0)
+
+post$m1.2_2 <- as_draws_array(anim.main$m1.2, variable = "b_mentSt1")
+post_mentSt <- mean(post$m1.2_2<0)
+
+post$m1.2_3 <- as_draws_array(anim.main$m1.2, variable = "b_drug2:mentSt1")
+post_drugXmentSt <- mean(post$m1.2_3>0)
+
+# model 1.3
+#-------------------------------------------------------------------------------
+anim.contr$m1.3 <- brm(formula = accuracy  ~ drug*drugDay +
+                      (1+drug||sub) + 
+                      (1|animID),
+                    data = mainDat, 
+                    family = gaussian(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .99),
+                    prior = prior2,
+                    save_pars = save_pars(all = TRUE))
+
+model_fixef$m1.3.drug <- fixef(anim.contr$m1.3, pars = "drug2")
+model_fixef$m1.3.drugDay <- fixef(anim.contr$m1.3, pars = "drugDay2")
+model_fixef$m1.3.drugXdrugDay <- fixef(anim.contr$m1.3, pars = "drug2:drugDay2")
+
+```
+
+```{r model-checks-model1, echo=FALSE, cache=TRUE, include=FALSE, warning=FALSE}
+
+final_model <- anim.main$m1.2
+final.trans <- ggs(final_model) # the ggs function transforms the brms output into a longformat tibble, that we can use to make different types of plots.
+
+ggplot(filter(final.trans, Parameter %in% c("b_drug2", "b_mentSt1", "b_drug2:mentSt1")),
+        aes(x   = Iteration,
+            y   = value,
+            col = as.factor(Chain)))+
+  geom_line() +
+  geom_vline(xintercept = 1000)+
+  facet_grid(Parameter ~ . ,
+             scale  = 'free_y',
+             switch = 'y')+
+  labs(title = "Caterpillar Plots",
+       col   = "Chains")
+
+# check for sensitivity to pertubations to prior & likelihood
+powerscale_sensitivity(final_model)
+
+
+# stat recovery (although mean not a good indicator for bimodal distributions?)
+pp_check(final_model, type = 'stat', stat = 'median', ndraws = 50) + theme_minimal()
+
+# check if residuals are normally distributed
+point_preds <- fitted(final_model)[, 1]
+point_errs <- residuals(final_model)[, 1]
+
+hist(point_errs)
+
+loo_R2(final_model)
+bayes_R2(final_model)
+
+```
+
+```{r model2, echo=FALSE, cache=TRUE, include=FALSE, warning=FALSE}
+
+# model 2.1
+#-------------------------------------------------------------------------------
+anim.main$m2.1 <- brm(formula = accuracy  ~ drug*mentSt*OwnStimDiff_jerk +
+                      (1+drug||sub) + 
+                      (1|animID),
+                    data = mainDat, 
+                    family = gaussian(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .97),
+                    prior = prior2,
+                    save_pars = save_pars(all = TRUE))
+
+# extract fixed effects
+model_fixef$m2.1.drug <- fixef(anim.main$m2.1, pars = "drug2")
+model_fixef$m2.1.mentSt <- fixef(anim.main$m2.1, pars = "mentSt1")
+model_fixef$m2.1.jrkDiff <- fixef(anim.main$m2.1, pars = "OwnStimDiff_jerk")
+model_fixef$m2.1.drugXjrkDiff <- fixef(anim.main$m2.1, pars = "drug2:OwnStimDiff_jerk")
+model_fixef$m2.1.mentStXjrkDiff <- fixef(anim.main$m2.1, pars = "mentSt1:OwnStimDiff_jerk")
+model_fixef$m2.1.drugXmentStXjrkDiff <- fixef(anim.main$m2.1, pars = "drug2:mentSt1:OwnStimDiff_jerk")
+
+# get posterior probabilities
+(draws_fit <- as_draws_array(anim.main$m2.))
+posterior::summarize_draws(draws_fit) # summarize posteriors to get parameter names
+
+post$m2.1_1 <- as_draws_array(anim.main$m2.1, variable = "b_drug2:mentSt1:OwnStimDiff_jerk")
+post_drugXmentStXjrkDiff <- mean(post$m2.1_1>0)
+
+# post-hoc models
+#-------------------------------------------------------------------------------
+mainDat.PLA <-
+  mainDat %>%
+  filter(drug == 1)
+
+mainDat.HAL <-
+  mainDat %>%
+  filter(drug == 2)
+
+anim.main$m2.2 <- brm(formula = accuracy  ~ OwnStimDiff_jerk*mentSt +
+                      (1|sub) + 
+                      (1|animID),
+                    data = mainDat.PLA, 
+                    family = gaussian(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .97),
+                    prior = prior2,
+                    save_pars = save_pars(all = TRUE))
+
+# extract fixed effects
+model_fixef$m2.2.mentSt <- fixef(anim.main$m2.2, pars = "mentSt1")
+model_fixef$m2.2.jrkDiff <- fixef(anim.main$m2.2, pars = "OwnStimDiff_jerk")
+model_fixef$m2.2.mentStXjrkDiff <- fixef(anim.main$m2.2, pars = "OwnStimDiff_jerk:mentSt1")
+
+anim.main$m2.3 <- brm(formula = accuracy  ~ OwnStimDiff_jerk*mentSt +
+                      (1|sub) + 
+                      (1|animID),
+                    data = mainDat.HAL, 
+                    family = gaussian(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .97),
+                    prior = prior2,
+                    save_pars = save_pars(all = TRUE))
+
+# extract fixed effects
+model_fixef$m2.3.mentSt <- fixef(anim.main$m2.3, pars = "mentSt1")
+model_fixef$m2.3.jrkDiff <- fixef(anim.main$m2.3, pars = "OwnStimDiff_jerk")
+model_fixef$m2.3.mentStXjrkDiff <- fixef(anim.main$m2.3, pars = "OwnStimDiff_jerk:mentSt1")
+
+```
+
+```{r model-checks-model2, echo=FALSE, cache=TRUE, include=FALSE, warning=FALSE}
+
+final_model <- anim.main$m2.1 
+final.trans <- ggs(final_model) # the ggs function transforms the brms output into a longformat tibble, that we can use to make different types of plots.
+
+ggplot(filter(final.trans, Parameter %in% c("b_drug2", "b_mentSt1", "b_drug2:mentSt1", "b_OwnStimDiff_jerk",
+                                            "b_drug2:OwnStimDiff_jerk", "b_mentSt1:OwnStimDiff_jerk", 
+                                            "b_drug2:mentSt1:OwnStimDiff_jerk")),
+        aes(x   = Iteration,
+            y   = value,
+            col = as.factor(Chain)))+
+  geom_line() +
+  geom_vline(xintercept = 1000)+
+  facet_grid(Parameter ~ . ,
+             scale  = 'free_y',
+             switch = 'y')+
+  labs(title = "Caterpillar Plots",
+       col   = "Chains")
+
+# check for sensitivity to pertubations to prior & likelihood
+powerscale_sensitivity(final_model)
+
+# stat recovery (although mean not a good indicator for bimodal distributions?)
+pp_check(final_model, type = 'stat', stat = 'median', ndraws = 50) + theme_minimal()
+
+# check if residuals are normally distributed
+point_preds <- fitted(final_model)[, 1]
+point_errs <- residuals(final_model)[, 1]
+
+hist(point_errs)
+
+loo_R2(final_model)
+bayes_R2(final_model)
+
+```
+
+# Haloperidol resulted in reduced labelling accuracy for both mental and non-mental state animations
+A Bayesian mixed effects model (Model 1.1) with random intercepts for subject ID and animation ID (unique identifier for each animation) and a random slope for the effect of drug varying by subject ID was fitted to accuracy (see Animations Task) and the dummy-coded predictor drug (haloperidol [HAL] vs. placebo [PLA]; reference level = PLA; see Model 1, Appendix 1). The model revealed a robust main effect of drug, where haloperidol resulted in lower accuracy in labelling the animations ($\mathbb{E}_{HALvsPLA}$ = `r round(model_fixef$m1.1.drug[1], digits = 2)`, CrI = [`r round(model_fixef$m1.1.drug[3], digits = 2)`, `r round(model_fixef$m1.1.drug[4], digits =2)`]). The posterior probability that there was a truly negative effect (P($\mathbb{E}_{HALvsPLA}$<0) was `r round(mean(post$m1.1_1<0), digits = 2)`). To further assess whether the drug specifically affected performance for mental state animations, the dummy-coded factor mental state (mental vs non-mental; reference level = non-mental), as well as the two-way interaction between drug and mental state, was added to the model. This second model (Model 1.2) showed no interaction between drug and mental state ($\mathbb{E}_{HALvsPLA,mentalVSnon-mental}$ = `r round(model_fixef$m1.2.drugXmentSt[1], digits = 2)`, CrI = [`r round(model_fixef$m1.2.drugXmentSt[3], digits = 2)`, `r round(model_fixef$m1.2.drugXmentSt[4], digits =2)`]), indicating that haloperidol decreased attribution accuracy to a comparable extent for mental- and non-mental state animations. Furthermore, adding mental state to the model led to an even stronger effect of drug ($\mathbb{E}_{HALvsPLA}$ = `r round(model_fixef$m1.2.drug[1], digits = 2)`, CrI = [`r round(model_fixef$m1.2.drug[3], digits = 2)`, `r round(model_fixef$m1.2.drug[4], digits =2)`]). Thus, after taking the drug, participants’ ability to correctly classify an animation decreased by `r round(model_fixef$m1.2.drug[1], digits = 2)` points compared to the placebo condition (see Fig.1). These results, indicating a comparable influence of haloperidol on inference about mental and non-mental states, may be mediated by dopamine’s influence on general cognitive functions - such as working memory and attention - which play a key role in inferential reasoning [@Lebedev2018]. We return to this question in our exploratory analyses after first testing our second hypothesis. Finally, in line with our previous findings [@Schuster2021], a main effect of mental state ($\mathbb{E}_{mentalVSnon-mental}$ = `r round(model_fixef$m1.2.mentSt[1], digits = 2)`, CrI = [`r round(model_fixef$m1.2.mentSt[3], digits = 2)`, `r round(model_fixef$m1.2.mentSt[4], digits =2)`]) suggests that overall, participants struggled more with interpreting animations depicting mental state interactions relative to ones displaying non-mental state interactions.
+
+```{r figure-1, fig.cap='Drug effects on accuracy by mental state condition.', fig.width=4.5*1.6, fig.height=4.5, dpi=300, echo=FALSE, cache=TRUE, warning=FALSE}
+
+ggplot(mainDat[!(is.na(mainDat$mentSt)), ],
+       aes(mentSt, accuracy, fill = drug, color = drug)) + 
+  ggdist::stat_halfeye(
+    adjust = .5, 
+    width = .7, 
+    .width = 0, 
+    justification = -.3,
+    alpha = .65,
+    point_colour = NA) + 
+  geom_boxplot(
+    width = .3, 
+    alpha = .4,
+    outlier.shape = NA,
+    position = position_dodge(.4)) +
+  geom_point(
+    size = 1.1,
+    alpha = .4,
+    position = position_jitterdodge(
+      seed = 1, jitter.width = .25,
+      dodge.width = .4)) + 
+  scale_color_manual(labels = c("PLA", "HAL"), values = colours) +
+  scale_fill_manual(guide = "none", values = colours) +
+  labs(
+    y = "Accuracy",
+    cex.lab = 1,
+    na.rm = TRUE) +
+  theme(axis.title.x = element_blank()) +
+  scale_x_discrete(labels=c('non-mental state', 'mental state')) +
+  coord_cartesian(xlim = c(1.2, NA), clip = "off")
+
+ggsave("Figure_1-raincloud.png", bg="white", height = 4.5 , width = 4.5 * 1.6)
+```
+
+Control analyses: First, while model residuals did not violate the normality assumption of linear regression, visual inspection of the response variable revealed bimodality of our data. We confirmed the present results remain after this bimodality is taken into account by additionally modelling the response as a mixture of two gaussian distributions (see Appendix 2: Supplementary Results). Second, to further investigate possible confounding effects of the day the drug was taken, a control model (Model 1.3) was fit to drug and drug day (day 1 vs day 2, dummy coded), as well as their interaction, predicting accuracy. There was no interaction between drug and drug day, indicated by a negative effect of drug for drug day 1 ($\mathbb{E}_{HALvsPLA,day1}$ = `r round(model_fixef$m1.3.drug[1], digits = 2)`, CrI = [`r round(model_fixef$m1.3.drug[3], digits = 2)`, `r round(model_fixef$m1.3.drug[4], digits = 2)`]), which did not differ from the drug effect on day 2 ($\mathbb{E}_{HALvsPLA,day1vsday2}$ = `r round(model_fixef$m1.3.drugXdrugDay[1], digits = 2)`, CrI = [`r round(model_fixef$m1.3.drugXdrugDay[3], digits = 2)`, `r round(model_fixef$m1.3.drugXdrugDay[4], digits = 2)`]).
+
+# Dopamine manipulation diminished the effect of movement similarity for mental state animations
+To assess the contribution of dopamine disruption to the extent to which individuals make use of their own motor codes when judging the observed movements, jerk difference was calculated for both PLA and HAL trials by first subtracting the mean jerk (jerk was calculated as the third order non-null derivative of the raw positional data; for more details see [@Schuster2021]) of each video a person rated from their own jerk values when animating the same word, and then taking the absolute magnitude of those values. Thus, jerk difference indexes observer-animator movement similarity wherein lower values reflect higher jerk similarity. Subsequently, jerk difference was added to the previous model of drug and mental state (Model 1.2) predicting animations task accuracy. This new model (Model 2.1) reproduced the previous main effects of drug ($\mathbb{E}_{HALvsPLA}$ = `r round(model_fixef$m2.1.drug[1], digits = 2)`, CrI = [`r round(model_fixef$m2.1.drug[3], digits = 2)`, `r round(model_fixef$m2.1.drug[4], digits =2)`]) and mental state ($\mathbb{E}_{mentalVSnon-mental}$ = `r round(model_fixef$m2.1.mentSt[1], digits = 2)`, CrI = [`r round(model_fixef$m2.1.mentSt[3], digits = 2)`, `r round(model_fixef$m2.1.mentSt[4], digits =2)`]). Furthermore, the model revealed an interaction between drug, jerk difference and mental state, indicating that while under placebo, there was a stronger negative effect of jerk difference for mental, relative to non-mental state animations ($\mathbb{E}_{jerkDiff,non-mental,PLA}$ = `r round(model_fixef$m2.1.jrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.1.jrkDiff[3], digits = 2)`, `r round(model_fixef$m2.1.jrkDiff[4], digits =2)`]; $\mathbb{E}_{jerkDiff,mentalVSnon-mental,PLA}$ = `r round(model_fixef$m2.1.mentStXjrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.1.mentStXjrkDiff[3], digits = 2)`, `r round(model_fixef$m2.1.mentStXjrkDiff[4], digits =2)`]), under haloperidol, this negative effect was diminished ($\mathbb{E}_{jerkDiff,mentalVSnon-mental,HALvsPLA}$ = `r round(model_fixef$m2.1.drugXmentStXjrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.1.drugXmentStXjrkDiff[3], digits = 2)`, `r round(model_fixef$m2.1.drugXmentStXjrkDiff[4], digits = 2)`], P($\mathbb{E}_{jerkDiff,mentalVSnon-mental,HALvsPLA}$>0) = `r round(post_drugXmentStXjrkDiff, digits = 2)`). Separate post-hoc models for placebo and haloperidol trials confirmed this pattern, with a robust negative effect of jerk difference for mental-, but not non-mental state animations in the placebo model (Model 2.2: $\mathbb{E}_{PLA,jerkDiff,non-mental}$ = `r round(model_fixef$m2.2.jrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.2.jrkDiff[3], digits = 2)`, `r round(model_fixef$m2.2.jrkDiff[4], digits = 2)`]; $\mathbb{E}_{PLA,jerkDiff,mentalVSnon-mental}$ = `r round(model_fixef$m2.2.mentStXjrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.2.mentStXjrkDiff[3], digits = 2)`, `r round(model_fixef$m2.2.mentStXjrkDiff[4], digits = 2)`]), and no effect of jerk difference in either mental state condition in the haloperidol model (Model 2.3: $\mathbb{E}_{HAL,jerkDiff,non-mental}$ = `r round(model_fixef$m2.3.jrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.3.jrkDiff[3], digits = 2)`, `r round(model_fixef$m2.3.jrkDiff[4], digits = 2)`]; $\mathbb{E}_{HAL,jerkDiff,mentalVSnon-mental}$ = `r round(model_fixef$m2.3.mentStXjrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.3.mentStXjrkDiff[3], digits = 2)`, `r round(model_fixef$m2.3.mentStXjrkDiff[4], digits = 2)`]. Consequently, under placebo, the higher the difference in jerk between an observer and the original animator of a given mental state animation, the less accurate the observer was in classifying that animation. Thus, the present placebo results are in line with our previous findings [@Schuster2021], this time emphasising a role for movement similarity in promoting inference from mental state animations. In contrast, under haloperidol, there was no such effect of movement similarity for the non-mental or the mental state animations (see Fig. 2A-B). 
+
+```{r figure-2, fig.cap='Relationship between jerk difference and accuracy depends on how jerk difference was calculated.', fig.width=4.5*1.6, fig.height=4.5, dpi=300, echo=FALSE, cache=TRUE, warning=FALSE}
+
+plot1 <- ggplot(data  = mainDat.PLA,
+                   aes(x = ownStimDiff_jrk,
+                       y = accuracy,
+                       color = mentSt),
+                   na.rm = TRUE) +
+  geom_point(size = 2,
+             alpha = .3,
+             position = "jitter",
+             na.rm = TRUE) + 
+  geom_smooth(method = lm,
+              se     = FALSE,
+              size   = .9,
+              alpha  = .9,
+              na.rm = TRUE) + # add regression line
+  labs(
+    y = "Accuracy",
+    x = "Jerk difference (z-score)",
+    colour = "Condition",
+    cex.lab = 1,
+    na.rm = TRUE) +
+    ggtitle('A') +
+  theme(plot.title = element_text(size = 20, face = "bold")) +
+  # facet_wrap(~drug) +
+  scale_color_manual(values = colours, na.translate = FALSE,
+                     labels = c("non-mental state", "mental state"))
+
+plot2 <- ggplot(data  = mainDat.HAL,
+                   aes(x = ownStimDiff_jrk,
+                       y = accuracy,
+                       color = mentSt),
+                   na.rm = TRUE) +
+  geom_point(size = 2,
+             alpha = .3,
+             position = "jitter",
+             na.rm = TRUE) + 
+  geom_smooth(method = lm,
+              se     = FALSE,
+              size   = .9,
+              alpha  = .9,
+              na.rm = TRUE) + # add regression line
+  labs(
+    y = "Accuracy",
+    x = "Jerk difference (z-score)",
+    cex.lab = 1,
+    na.rm = TRUE) +
+      ggtitle('B') +
+  theme(plot.title = element_text(size = 20, face = "bold"),
+        legend.position = "none") + 
+  # facet_wrap(~drug) +
+  scale_color_manual(values = colours, na.translate = FALSE)
+
+
+plot3 <- ggplot(data  = mainDat.HAL,
+                   aes(x = PLAownStimDiff_jerk,
+                       y = accuracy,
+                       color = mentSt),
+                   na.rm = TRUE) +
+  geom_point(size = 2,
+             alpha = .3,
+             position = "jitter",
+             na.rm = TRUE) + 
+  geom_smooth(method = lm,
+              se     = FALSE,
+              size   = .9,
+              alpha  = .9,
+              na.rm = TRUE) + # add regression line
+  labs(
+    y = "Accuracy",
+    x = "Jerk difference (z-score)",
+    cex.lab = 1,
+    na.rm = TRUE) +
+    ggtitle('C') +
+  theme(plot.title = element_text(size = 20, face = "bold"),
+        legend.position = "none") +
+  # facet_wrap(~drug) +
+  scale_color_manual(values = colours, na.translate = FALSE)
+
+plot1 + guide_area() + plot2 + plot3 + 
+  plot_layout(guides = 'collect')
+
+ggsave("Figure_2.png", bg="white", height = 4.5 , width = 4.5 * 1.6)
+```
+
+```{r model3, echo=FALSE, warning=FALSE, cache=TRUE, cache.lazy = FALSE, include=FALSE}
+
+# model 3
+#-------------------------------------------------------------------------------
+anim.main$m3 <- brm(formula = accuracy  ~ drug*mentSt*PLAownStimDiff_jerk +
+                      (1+drug||sub) + 
+                      (1|animID),
+                    data = mainDat, 
+                    family = gaussian(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .97),
+                    prior = prior2,
+                    save_pars = save_pars(all = TRUE))
+
+# extract fixed effects
+model_fixef$m3.drug <- fixef(anim.main$m3, pars = "drug2")
+model_fixef$m3.mentSt <- fixef(anim.main$m3, pars = "mentSt1")
+model_fixef$m3.jrkDiff <- fixef(anim.main$m3, pars = "PLAownStimDiff_jerk")
+model_fixef$m3.drugXjrkDiff <- fixef(anim.main$m3, pars = "drug2:PLAownStimDiff_jerk")
+model_fixef$m3.mentStXjrkDiff <- fixef(anim.main$m3, pars = "mentSt1:PLAownStimDiff_jerk")
+model_fixef$m3.drugXmentStXjrkDiff <- fixef(anim.main$m3, pars = "drug2:mentSt1:PLAownStimDiff_jerk")
+
+```
+
+The disappearance of the jerk difference effect in HAL trials suggests that under haloperidol, the relationship between one’s own kinematics and the kinematics present in an animation stimulus did not affect accuracy. We hypothesise that this is because movements produced in the haloperidol condition are not representative of the movements produced across the lifetime, and upon which sensorimotor internal models are fine-tuned [@Hunnius2014, @Edey2020]. To test the hypothesis that when observing the animations, individuals recruited their lifetime, experience-based motor codes under both PLA and HAL conditions, we calculated placebo jerk difference for each animation stimulus viewed in the haloperidol condition by subtracting a given animation stimulus’ mean jerk from the participant’s own jerk in the placebo condition. 
+A new model (Model 3) with placebo jerk difference added as covariate revealed the same main effect of drug ($\mathbb{E}_{HALvsPLA}$ = `r round(model_fixef$m3.drug[1], digits = 2)`, CrI = [`r round(model_fixef$m3.drug[3], digits = 2)`, `r round(model_fixef$m3.drug[4], digits = 2)`]), as well as the same interaction between jerk difference and mental state as before ($\mathbb{E}_{jerkDiff,non-mental}$ = `r round(model_fixef$m3.jrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m3.jrkDiff[3], digits = 2)`, `r round(model_fixef$m3.jrkDiff[4], digits = 2)`]; $\mathbb{E}_{jerkDiff,mentalVSnon-mental}$ = `r round(model_fixef$m3.mentStXjrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m3.mentStXjrkDiff[3], digits = 2)`, `r round(model_fixef$m3.mentStXjrkDiff[4], digits = 2)`]). However, there was no interaction between jerk difference, mental state and drug ($\mathbb{E}_{jerkDiff,HALvsPLA,mentalVSnon-mental}$ = `r round(model_fixef$m3.drugXmentStXjrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m3.drugXmentStXjrkDiff[3], digits = 2)`, `r round(model_fixef$m3.drugXmentStXjrkDiff[4], digits = 2)`]), indicating a negative effect of placebo jerk difference for mental state animations for both PLA and HAL trials (see Fig. 2C). In other words, when participants were labelling animations under haloperidol, accuracy in those judgements was affected by their own movements produced in the placebo-, but not by their movements produced in the drug condition.
+
+# Effects of Haloperidol on animations task accuracy show specific relationships to drug effects on emotion recognition
+To probe potential underlying mechanisms of the observed drug effects on accuracy in the animations task, we investigated relationships between drug related changes in animations task accuracy and drug effects on tasks indexing emotion recognition and executive functions. For this, we first created a variable that indexed drug effects on animations task accuracy on an individual participant basis. Due to the random selection of animations (see @Schuster2021), participants did not necessarily view the same animations in PLA and HAL trials, making it impossible to calculate a trial-by-trial measure of drug related changes. Thus, the accuracy measure was first transformed into a binary variable, classifying as ‘correct’ any trial where the highest rating was given to the target word, while a trial where the highest rating was given to a non-target word was classed as ‘incorrect’. Subsequently, the percentage of correct trials out of all eight trials for a given word was calculated, resulting in four percentage accuracy values per animation word per participant (2 PLA, 2 HAL). Finally, for each participant, drug related changes in accuracy were calculated by subtracting percentage accuracy values of placebo days from those collected on drug days. Animations task accuracy change scores therefore represent the change in percentage of correct trials from placebo to haloperidol conditions, whereby positive values indicate enhanced ability to correctly label the animations after the drug, and negative values indicate a decrease in labelling accuracy.
+Whilst there is a relatively large evidence base implicating dopaminergic signalling in general cognition, including executive function [@Floresco2006] and learning [@Wise2004], the literature is less conclusive about the role of dopamine in socio-cognitive processes. Thus, to investigate whether our observed drug effects on animations task accuracy were related to drug effects on socio-cognitive performance above and beyond expected relationships with drug effects on executive functions, we calculated working memory change scores as index of drug effects on working memory span and emotion recognition change scores indexing drug effects on emotion recognition by subtracting accuracy scores of PLA trials from those obtained in HAL trials for both tasks. For both indices, positive change scores indicate increased performance under haloperidol. If we observed specific relationships between drug related changes in emotion recognition and changes in accuracy for mental state, but not non-mental state animations, this would provide support for specific effects of dopamine challenge on socio- cognitive processes.
+
+```{r load-change-data, echo=FALSE, cache=TRUE, warning=FALSE}
+
+# load HAL-PLA difference data
+diffDat <- read_csv("diff_data.csv") 
+
+# for some reason brms now adds NaNs as factor levels - replace with NA
+diffDat <- diffDat %>% mutate(across(where(is.numeric), \(x) ifelse(is.nan(x), NA, x)))
+
+diffDat$sub <- factor(diffDat$subs)
+diffDat$cond <- factor(diffDat$cond)
+
+diffDat$perc_accurChange.ord <- factor(diffDat$perc_accurChange, order = TRUE)
+
+# normalise continuous predictors
+diffDat$VWMdiff <- scale(diffDat$VWM_diff, scale = TRUE, center = TRUE)
+diffDat$baselVWM <- scale(diffDat$basel_VWM, scale = TRUE, center = TRUE)
+diffDat$PLWallDiff <- scale(diffDat$PLW_all_diff, scale = TRUE, center = TRUE) # collapsed across all speed levels (see https://www.jneurosci.org/content/42/21/4394)
+diffDat$mentSt <- recode(diffDat$cond,  "1" = "1", "2" = "1", "3" = "0", "4" = "0")
+diffDat$mentSt <- relevel(diffDat$mentSt, ref = "0")
+
+# define WM groups by median split
+diffDat$baselVWM_d <- dicho(diffDat$basel_VWM, dich.by = "median")
+# define custom contrast for WM group
+contrasts(diffDat$baselVWM_d) = contr.sum(2)
+
+anim.diff = list()
+
+```
+
+``` {r figure-3, fig.cap='Relationship between drug effects on animations task performance and emotion recognition performance.', fig.width=4.5*1.6, fig.height=4.5, dpi=300, echo=FALSE, cache=TRUE, warning=FALSE}
+
+library(grid)
+text_more <- textGrob("more\naccurate", gp=gpar(fontsize=12, fontface="bold"))
+text_less <- textGrob("less\naccurate", gp=gpar(fontsize=12, fontface="bold"))
+
+Figure_3 <- ggplot(data  = diffDat,
+                 aes(x = PLWallDiff,
+                     y = perc_accurChange,
+                     color = mentSt),
+                 na.rm = TRUE) +
+  geom_point(size = 2,
+             alpha = .7,
+             position = position_jitter(height = .1),
+             na.rm = TRUE) + 
+  geom_smooth(method = lm,
+              se     = TRUE,
+              size   = .9,
+              alpha  = .15,
+              na.rm = TRUE) + # add regression line
+  # geom_boxplot() +
+  labs(
+    y = "Animations task change",
+    x = "Emotion recognition change (z-score)",
+    cex.lab = 1,
+    na.rm = TRUE) +
+    # choose colour palette and filter out NaNs
+  scale_color_brewer(name="Condition", 
+                     labels=c("non-mental","mental"), 
+                     palette = "Accent", na.translate = F) + 
+  theme(plot.title = element_text(hjust = 0.5, size = 18, face = "bold")) +
+      # add space below x-axis and annotate text
+    theme(plot.margin = unit(c(1,1,2,1), "lines")) +
+       annotation_custom(text_less,xmin=-2,xmax=-2,ymin=-0.47,ymax=-0.47) + 
+       annotation_custom(text_more,xmin=1.75,xmax=1.75,ymin=-0.47,ymax=-0.45) +
+    # turn clipping off so objects outside of axes limits are shown
+    coord_cartesian(clip = "off")
+    
+Figure_3
+
+ggsave("Figure_3.png", bg="white", height = 4.5 , width = 4.5 * 1.6)
+```
+
+```{r model4, echo=FALSE, warning=FALSE, cache=TRUE, cache.lazy = FALSE, include=FALSE}
+
+prior3 <- c(set_prior("normal(0,0.1)", class = "b"), # sets all coefficient priors
+            set_prior("normal(0,0.5)", class = "Intercept"))
+
+# model 4.0
+#-------------------------------------------------------------------------------
+anim.diff$m4.0 <- brm(formula = perc_accurChange ~ PLWallDiff*mentSt + VWM_diff*mentSt +
+                        (1|sub),
+                    data = diffDat, 
+                    family = student(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .99), 
+                    prior = prior3, 
+                    save_pars = save_pars(all = TRUE))
+
+anim.diff$m4.0 <- add_criterion(anim.diff$m4.0, c("loo", "waic"))
+
+# model 4.1
+#-------------------------------------------------------------------------------
+
+# re-run model 4 without random effects
+anim.diff$m4.1 <- brm(formula = perc_accurChange ~ PLWallDiff*mentSt + VWM_diff*mentSt,
+                    data = diffDat, 
+                    family = student(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .99), 
+                    prior = prior3, 
+                    save_pars = save_pars(all = TRUE))
+
+anim.diff$m4.1 <- add_criterion(anim.diff$m4.1, c("loo", "waic"))
+
+# compare models
+LOO(anim.diff$m4.0, anim.diff$m4.1)
+model_weights(anim.diff$m4.0, anim.diff$m4.1)
+
+# re-run model 4 as truncated model. To compare discretised continuous against cumulative (ordinal) model, data needs to be truncated at half the bin size below and above lower and upper bounds respectively (see https://discourse.mc-stan.org/t/model-misspecified-or-only-weakly-predictive/30814/10)
+anim.diff$m4.1 <- brm(formula = perc_accurChange | trunc(lb = -1.0625, ub = 1.0625) ~ PLWallDiff*mentSt + VWM_diff*mentSt,
+                    data = diffDat, 
+                    family = student(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .99), 
+                    prior = prior3, 
+                    save_pars = save_pars(all = TRUE))
+
+anim.diff$m4.1 <- add_criterion(anim.diff$m4.1, c("loo", "waic"))
+
+# adjust loo values (see link above for explanation why)
+loo1 <- loo(anim.diff$m4.1)
+loo1$estimates['elpd_loo','Estimate'] <- loo1$estimates['elpd_loo','Estimate'] + 107*log(0.125)
+loo1$pointwise[,'elpd_loo'] <- loo1$pointwise[,'elpd_loo'] + log(0.125)
+
+# run ordinal model
+anim.diff$m4.1.ord <- brm(formula = perc_accurChange.ord ~ PLWallDiff*mentSt + VWM_diff*mentSt,
+                    data = diffDat, 
+                    family = cumulative,
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .99), 
+                    prior = prior3, 
+                    save_pars = save_pars(all = TRUE))
+
+# compare ordinal and continuous models
+loo_compare(loo1, loo(anim.diff$m4.1.ord))
+
+# prior sensitivity analyses revealed prior-data conflict --> re-run model with adjusted prior
+prior3.adj <- c(set_prior("normal(0,0.2)", class = "b"), # sets all coefficient priors
+            set_prior("normal(0,0.5)", class = "Intercept"))
+
+anim.diff$m4.1 <- brm(formula = perc_accurChange | trunc(lb = -1.0625, ub = 1.0625) ~ PLWallDiff*mentSt + VWM_diff*mentSt,
+                    data = diffDat, 
+                    family = student(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .99), 
+                    prior = prior3.adj, 
+                    save_pars = save_pars(all = TRUE))
+
+# summarize posteriors to get parameter names
+(draws_fit <- as_draws_array(anim.diff$m4.1))
+posterior::summarize_draws(draws_fit) 
+
+# extract fixed effects
+model_fixef$m4.1.ERchange <- fixef(anim.diff$m4.1, pars = "PLWallDiff")
+model_fixef$m4.1.mentSt <- fixef(anim.diff$m4.1, pars = "mentSt1")
+model_fixef$m4.1.WMchange <- fixef(anim.diff$m4.1, pars = "VWM_diff")
+model_fixef$m4.1.ERchangeXmentSt <- fixef(anim.diff$m4.1, pars = "PLWallDiff:mentSt1")
+model_fixef$m4.1.mentStXWMchange <- fixef(anim.diff$m4.1, pars = "mentSt1:VWM_diff")
+
+# model 4.2
+#-------------------------------------------------------------------------------
+anim.diff$m4.2 <- brm(formula = perc_accurChange | trunc(lb = -1.0625, ub = 1.0625) ~ PLWallDiff*mentSt,
+                    data = diffDat, 
+                    family = student(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .99), 
+                    prior = prior3.adj, 
+                    save_pars = save_pars(all = TRUE))
+
+# extract fixed effects
+model_fixef$m4.2.ERchange <- fixef(anim.diff$m4.2, pars = "PLWallDiff")
+model_fixef$m4.2.mentSt <- fixef(anim.diff$m4.2, pars = "mentSt1")
+model_fixef$m4.2.ERchangeXmentSt <- fixef(anim.diff$m4.2, pars = "PLWallDiff:mentSt1")
+
+
+post$m4.2 <- as_draws_array(anim.diff$m4.2, variable = "b_PLWallDiff:mentSt1")
+post_ERchangeXmentSt <- mean(post$m4.2>0)
+
+```
+
+A Bayesian linear model (Model 4.1; model comparison revealed that random intercepts for subject ID did not additionally explain variance; see Supplementary Materials) was fit to emotion recognition change, working memory change and mental state (mental, non-mental; dummy-coded, reference level = non-mental) as well as interactions between mental state and both continuous predictors, predicting animations task accuracy change. The discrete response variable was modelled as a student’s t distribution (a continuous was chosen over a cumulative model distribution based on model comparison using LOO [@Vehtari2017] showing clear preference for the discretised continuous model, for more details see Supplementary Materials). The first model revealed no effect for working memory change ($\mathbb{E}_{WMchange,non-mental}$ = `r round(model_fixef$m4.1.WMchange[1], digits = 2)`, CrI = [`r round(model_fixef$m4.1.WMchange[3], digits = 2)`, `r round(model_fixef$m4.1.WMchange[4], digits = 2)`]; $\mathbb{E}_{WMchange,mentalVSnon-mental}$ = `r round(model_fixef$m4.1.mentStXWMchange[1], digits = 2)`, CrI = [`r round(model_fixef$m4.1.mentStXWMchange[3], digits = 2)`, `r round(model_fixef$m4.1.mentStXWMchange[4], digits = 2)`]), hence all subsequent effects are reported based on a model excluding this variable (Model 4.2). Model 4.2 revealed an interaction between emotion recognition change
+and mental state, with no relationship between emotion recognition change and animations task accuracy change for non-mental state animations ($\mathbb{E}_{ERchange,non-mental}$ = `r round(model_fixef$m4.2.ERchange[1], digits = 2)`, CrI = [`r round(model_fixef$m4.2.ERchange[3], digits = 2)`, `r round(model_fixef$m4.2.ERchange[4], digits = 2)`]) and, relative to non-mental state animations, a positive relationship between emotion recognition change and animations task accuracy change for mental state animations ($\mathbb{E}_{ERchange,mentalVSnon-mental}$ = `r round(model_fixef$m4.2.ERchangeXmentSt[1], digits = 2)`, CrI = [`r round(model_fixef$m4.2.ERchangeXmentSt[3], digits = 2)`, `r round(model_fixef$m4.2.ERchangeXmentSt[4], digits = 2)`]; P($\mathbb{E}_{ERchange,mentalVSnon-mental}$>0) = `r post_ERchangeXmentSt`; coefficient for mental state animations $\mathbb{E}_{ERchange,mental}$: -0.01 + 0.06 = 0.05). Thus, for every 1 SD increase in emotion recognition accuracy after haloperidol, individuals showed a 5% increase in their ability to accurately identify mental state animations, while there was no related change in accuracy for non-mental state animations. Finally, there was no main effect of mental state ($\mathbb{E}_{mentalVSnon-mental}$ = `r round(model_fixef$m4.2.mentSt[1], digits = 2)`, CrI = [`r round(model_fixef$m4.2.mentSt[3], digits = 2)`, `r round(model_fixef$m4.2.mentSt[4], digits = 2)`]), further confirming our results from model 1 that the drug affected performance equally for mental and non-mental state animations.
+
+``` {r model-check-model3, echo=FALSE, warning=FALSE, cache=TRUE, include=FALSE}
+
+final_model <- anim.diff$m4.2
+
+# check for multicollinearity
+check_collinearity(final_model)
+
+# check for sensitivity to pertubations to prior & likelihood
+powerscale_sensitivity(final_model)
+
+pss <- powerscale_sequence(final_model)
+
+powerscale_plot_dens(pss, variables = c("b_PLWallDiff:mentSt1"))
+
+# trace plots
+final.trans <- ggs(final_model) # the ggs function transforms the brms output into a longformat tibble, that we can use to make different types of plots.
+ggplot(filter(final.trans, Parameter %in% c("b_PLWallDiff", "b_mentSt1", "b_PLWallDiff:mentSt1")),
+        aes(x   = Iteration,
+            y   = value,
+            col = as.factor(Chain)))+
+  geom_line() +
+  geom_vline(xintercept = 1000)+
+  facet_grid(Parameter ~ . ,
+             scale  = 'free_y',
+             switch = 'y')+
+  labs(title = "Caterpillar Plots",
+       col   = "Chains")
+
+# stat recovery (although mean not a good indicator for bimodal distributions?)
+pp_check(final_model, type = 'stat', stat = 'mean', ndraws = 50) + theme_minimal()
+pp_check(final_model, type = 'stat', stat = 'median', ndraws = 50) + theme_minimal()
+
+# check if residuals are normally distributed
+point_preds <- fitted(final_model)[, 1]
+point_errs <- residuals(final_model)[, 1]
+
+hist(point_errs)
+
+qplot(point_preds, point_errs)
+
+loo_R2(final_model)
+bayes_R2(final_model)
+
+```
