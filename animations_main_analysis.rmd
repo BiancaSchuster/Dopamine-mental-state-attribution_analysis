@@ -101,7 +101,7 @@ colours = c(pal1[2], pal2[5])
 
 ```{r load-data, include = FALSE, echo = FALSE, warning = FALSE}
 
-mainDat <- read_csv("main_data.csv") # created on 21/07/2023
+mainDat <- read_csv("main_data_v2.csv") # created on 16/01/2024, added model 1.4
 
 view(dfSummary(mainDat))
 
@@ -114,7 +114,8 @@ mainDat <- mainDat%>%
   mutate(animID = as.factor(as.character(vidIDs)))%>%
   mutate(cond = as.factor(as.character(condition)))%>% # 1 = surprising, 2 = seducing, 3 = following, 4 = fighting
   mutate(drugDay = as.factor(as.character(drugDay)))%>%
-  mutate(mentSt = as.factor(mentalState))
+  mutate(mentSt = as.factor(mentalState))%>%
+  mutate(arousal = as.ordered(arousal)) # tiredness ratings at T4 - just before main task
 
 # create working memory (WM) groups by median split
 mainDat$VWMacc_d <- dicho(mainDat$baselVWM, dich.by = "median")
@@ -220,6 +221,54 @@ anim.contr$m1.3 <- brm(formula = accuracy  ~ drug*drugDay +
 
 model_fixef$m1.3.drug <- fixef(anim.contr$m1.3, pars = "drug2")
 model_fixef$m1.3.drugDay <- fixef(anim.contr$m1.3, pars = "drugDay2")
+model_fixef$m1.3.drugXdrugDay <- fixef(anim.contr$m1.3, pars = "drug2:drugDay2")
+
+### compare models
+anim.contr$m1.3 <- add_criterion(anim.contr$m1.3, c("loo", "waic"))
+
+LOO(anim.main$m1.1, anim.contr$m1.3, "loo")
+
+
+# model 1.4
+#-------------------------------------------------------------------------------
+anim.contr$m1.4 <- brm(formula = accuracy  ~ drug*arousal +
+                      (1+drug||sub) + 
+                      (1|animID),
+                    data = mainDat, 
+                    family = gaussian(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .99),
+                    prior = prior2,
+                    save_pars = save_pars(all = TRUE))
+
+anim.contr$m1.4 <- add_criterion(anim.contr$m1.4, c("loo", "waic"))
+
+### compare models
+
+# rerun model 1.1 with the same number of observations as model 1.4 so they can be compared using LOO
+mainDat.subset <-
+  mainDat %>%
+  filter(arousal != is.nan(arousal))
+
+anim.main$m1.1.subs <- brm(formula = accuracy  ~ drug +
+                      (1+drug||sub) + 
+                      (1|animID),
+                    data = mainDat.subset, 
+                    family = gaussian(),
+                    warmup = 1000, iter = 5000, 
+                    cores = parallel::detectCores(),
+                    chains = 4, control = list(adapt_delta = .97),
+                    prior = prior2,
+                    save_pars = save_pars(all = TRUE))
+
+anim.main$m1.1.subs <- add_criterion(anim.main$m1.1.subs, c("loo", "waic"))
+
+LOO(anim.main$m1.1.subs, anim.contr$m1.4)
+model_weights(anim.main$m1.1.subs, anim.contr$m1.4, "loo")
+
+model_fixef$m1.3.drug <- fixef(anim.contr$m1.3, pars = "drug2")
+model_fixef$m1.3.arousal <- fixef(anim.contr$m1.3, pars = "drugDay2")
 model_fixef$m1.3.drugXdrugDay <- fixef(anim.contr$m1.3, pars = "drug2:drugDay2")
 
 ```
@@ -535,7 +584,8 @@ Whilst there is a relatively large evidence base implicating dopaminergic signal
 diffDat <- read_csv("diff_data.csv") 
 
 # for some reason brms now adds NaNs as factor levels - replace with NA
-diffDat <- diffDat %>% mutate(across(where(is.numeric), \(x) ifelse(is.nan(x), NA, x)))
+diffDat[diffDat == 'NaN'] <- NA # for some reason brms adds NaNs as factor levels - replace with NA
+
 
 diffDat$sub <- factor(diffDat$subs)
 diffDat$cond <- factor(diffDat$cond)
@@ -637,7 +687,7 @@ anim.diff$m4.1 <- add_criterion(anim.diff$m4.1, c("loo", "waic"))
 
 # compare models
 LOO(anim.diff$m4.0, anim.diff$m4.1)
-model_weights(anim.diff$m4.0, anim.diff$m4.1)
+model_weights(anim.diff$m4.0, anim.diff$m4.1, "loo")
 
 # re-run model 4 as truncated model. To compare discretised continuous against cumulative (ordinal) model, data needs to be truncated at half the bin size below and above lower and upper bounds respectively (see https://discourse.mc-stan.org/t/model-misspecified-or-only-weakly-predictive/30814/10)
 anim.diff$m4.1 <- brm(formula = perc_accurChange | trunc(lb = -1.0625, ub = 1.0625) ~ PLWallDiff*mentSt + VWM_diff*mentSt,
