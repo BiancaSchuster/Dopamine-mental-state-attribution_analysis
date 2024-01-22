@@ -20,7 +20,6 @@ linenumbers: yes
 linkcolor: "blue"
 # knit: (function(inputFile, encoding) {
 #     rmarkdown::render(inputFile, encoding = encoding, output_dir = here::here())
-#         })
 header-includes:
   - |
     \makeatletter
@@ -31,7 +30,6 @@ header-includes:
       {0\baselineskip \@plus 0.2ex \@minus 0.2ex}%
       {-\z@\relax}%
       {\normalfont\normalsize\bfseries\itshape\hspace{\parindent}{#1}\textit{\addperi}}{\relax}}
-
 csl: "`r system.file('rmd', 'apa7.csl', package = 'papaja')`"
 documentclass: "apa7"
 quote_labels: yes
@@ -48,9 +46,9 @@ rm(list = ls(all.names = TRUE))
 # check if required packages are installed, if not install
 list.of.packages <- c("here", "Select", "broom", "tidyverse", "RColorBrewer", "ggrain", "ggmcmc", "ggthemes",
                       "ggpubr", "patchwork", "brms", "rstan", "afex", "sjmisc", "sjmisc", "summarytools",
-                      "performance")
+                      "performance", "remotes", "wesanderson", "ggdist")
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
-if(length(new.packages)) install.packages(new.packages)
+if(length(new.packages)) install.packages(new.packages, repos = "http://cran.us.r-project.org")
 
 # load libraries
 library(here)         # for relative file paths
@@ -88,13 +86,9 @@ theme_set(theme_minimal(base_size = 15))
 # set colour palette - use R color brewer
 display.brewer.all() # show palette
 pal1 <- brewer.pal(8,"Accent")
-# and Wes Anderson 
-library(wesanderson)
-names(wes_palettes)
-pal2 <- wes_palette("Royal2")
+pal2 <- brewer.pal(8,"Dark2")
 
-colours = c(pal1[2], pal2[5])
-
+colours = c(pal1[1], pal2[3])
 
 ## R Markdown
 ```
@@ -136,7 +130,6 @@ mainDat <- mainDat%>%
 anim.main = list()
 post = list()
 model_fixef = list()
-post = list()
 anim.contr = list()
 
 ```
@@ -219,6 +212,7 @@ anim.contr$m1.3 <- brm(formula = accuracy  ~ drug*drugDay +
                     prior = prior2,
                     save_pars = save_pars(all = TRUE))
 
+# extract fixed effects
 model_fixef$m1.3.drug <- fixef(anim.contr$m1.3, pars = "drug2")
 model_fixef$m1.3.drugDay <- fixef(anim.contr$m1.3, pars = "drugDay2")
 model_fixef$m1.3.drugXdrugDay <- fixef(anim.contr$m1.3, pars = "drug2:drugDay2")
@@ -242,9 +236,11 @@ anim.contr$m1.4 <- brm(formula = accuracy  ~ drug*arousal +
                     prior = prior2,
                     save_pars = save_pars(all = TRUE))
 
-anim.contr$m1.4 <- add_criterion(anim.contr$m1.4, c("loo", "waic"))
+# extract fixed effects
+model_fixef$m1.4.drug <- fixef(anim.contr$m1.4, pars = "drug2")
 
 ### compare models
+anim.contr$m1.4 <- add_criterion(anim.contr$m1.4, c("loo", "waic"))
 
 # rerun model 1.1 with the same number of observations as model 1.4 so they can be compared using LOO
 mainDat.subset <-
@@ -423,6 +419,8 @@ A Bayesian mixed effects model (Model 1.1) with random intercepts for subject ID
 
 ```{r figure-1, fig.cap='Drug effects on accuracy by mental state condition.', fig.width=4.5*1.6, fig.height=4.5, dpi=300, echo=FALSE, cache=TRUE, warning=FALSE}
 
+# names(mainDat)[names(mainDat) == "drug"] <- "Drug"
+
 ggplot(mainDat[!(is.na(mainDat$mentSt)), ],
        aes(mentSt, accuracy, fill = drug, color = drug)) + 
   ggdist::stat_halfeye(
@@ -450,13 +448,13 @@ ggplot(mainDat[!(is.na(mainDat$mentSt)), ],
     cex.lab = 1,
     na.rm = TRUE) +
   theme(axis.title.x = element_blank()) +
-  scale_x_discrete(labels=c('non-mental state', 'mental state')) +
+  scale_x_discrete(labels=c('Non-mental state', 'Mental state')) +
   coord_cartesian(xlim = c(1.2, NA), clip = "off")
 
-ggsave("Figure_1-raincloud.png", bg="white", height = 4.5 , width = 4.5 * 1.6)
+ggsave("Figure_1-raincloud.tiff", device = "tiff", bg="white", height = 4.5 , width = 4.5 * 1.6, dpi = 300)
 ```
 
-Control analyses: First, while model residuals did not violate the normality assumption of linear regression, visual inspection of the response variable revealed bimodality of our data. We confirmed the present results remain after this bimodality is taken into account by additionally modelling the response as a mixture of two gaussian distributions (see Appendix 2: Supplementary Results). Second, to further investigate possible confounding effects of the day the drug was taken, a control model (Model 1.3) was fit to drug and drug day (day 1 vs day 2, dummy coded), as well as their interaction, predicting accuracy. There was no interaction between drug and drug day, indicated by a negative effect of drug for drug day 1 ($\mathbb{E}_{HALvsPLA,day1}$ = `r round(model_fixef$m1.3.drug[1], digits = 2)`, CrI = [`r round(model_fixef$m1.3.drug[3], digits = 2)`, `r round(model_fixef$m1.3.drug[4], digits = 2)`]), which did not differ from the drug effect on day 2 ($\mathbb{E}_{HALvsPLA,day1vsday2}$ = `r round(model_fixef$m1.3.drugXdrugDay[1], digits = 2)`, CrI = [`r round(model_fixef$m1.3.drugXdrugDay[3], digits = 2)`, `r round(model_fixef$m1.3.drugXdrugDay[4], digits = 2)`]).
+Control analyses: First, while model residuals did not violate the normality assumption of linear regression, visual inspection of the response variable revealed bimodality of our data. We confirmed the present results remain after this bimodality is taken into account by additionally modelling the response as a mixture of two gaussian distributions (see Appendix 2: Supplementary Results). Second, to further investigate possible confounding effects of the day the drug was taken, a control model (Model 1.3) was fit to drug and drug day (day 1 vs day 2, dummy coded), as well as their interaction, predicting accuracy. There was no interaction between drug and drug day, indicated by a negative effect of drug for drug day 1 ($\mathbb{E}_{HALvsPLA,day1}$ = `r round(model_fixef$m1.3.drug[1], digits = 2)`, CrI = [`r round(model_fixef$m1.3.drug[3], digits = 2)`, `r round(model_fixef$m1.3.drug[4], digits = 2)`]), which did not differ from the drug effect on day 2 ($\mathbb{E}_{HALvsPLA,day1vsday2}$ = `r round(model_fixef$m1.3.drugXdrugDay[1], digits = 2)`, CrI = [`r round(model_fixef$m1.3.drugXdrugDay[3], digits = 2)`, `r round(model_fixef$m1.3.drugXdrugDay[4], digits = 2)`]). Model 1.4 was fit to drug and arousal (participant reported tiredness levels ranging from 1 = not tired at all to 10 = maximally tired; collected before the main task) predicting accuracy. The model revealed a preserved effect for drug ($\mathbb{E}_{HALvsPLA}$ = `r round(model_fixef$m1.4.drug[1], 2)`, CrI = [`r round(model_fixef$m1.4.drug[3], 2)`, `r round(model_fixef$m1.4.drug[4], 2)`]), again with minimal increase in uncertainty surrounding the effect) and no main effects for arousal (see Supplementary Materials). There was an interaction between drug and a 7th order polynomial trend for arousal, however model comparison between models 1.1 and 1.4 confirmed that arousal level did not meaningfully contribute to explaining variance in accuracy; we therefore did not interpret this result any further.
 
 # Dopamine manipulation diminished the effect of movement similarity for mental state animations
 To assess the contribution of dopamine disruption to the extent to which individuals make use of their own motor codes when judging the observed movements, jerk difference was calculated for both PLA and HAL trials by first subtracting the mean jerk (jerk was calculated as the third order non-null derivative of the raw positional data; for more details see [@Schuster2021]) of each video a person rated from their own jerk values when animating the same word, and then taking the absolute magnitude of those values. Thus, jerk difference indexes observer-animator movement similarity wherein lower values reflect higher jerk similarity. Subsequently, jerk difference was added to the previous model of drug and mental state (Model 1.2) predicting animations task accuracy. This new model (Model 2.1) reproduced the previous main effects of drug ($\mathbb{E}_{HALvsPLA}$ = `r round(model_fixef$m2.1.drug[1], digits = 2)`, CrI = [`r round(model_fixef$m2.1.drug[3], digits = 2)`, `r round(model_fixef$m2.1.drug[4], digits =2)`]) and mental state ($\mathbb{E}_{mentalVSnon-mental}$ = `r round(model_fixef$m2.1.mentSt[1], digits = 2)`, CrI = [`r round(model_fixef$m2.1.mentSt[3], digits = 2)`, `r round(model_fixef$m2.1.mentSt[4], digits =2)`]). Furthermore, the model revealed an interaction between drug, jerk difference and mental state, indicating that while under placebo, there was a stronger negative effect of jerk difference for mental, relative to non-mental state animations ($\mathbb{E}_{jerkDiff,non-mental,PLA}$ = `r round(model_fixef$m2.1.jrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.1.jrkDiff[3], digits = 2)`, `r round(model_fixef$m2.1.jrkDiff[4], digits =2)`]; $\mathbb{E}_{jerkDiff,mentalVSnon-mental,PLA}$ = `r round(model_fixef$m2.1.mentStXjrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.1.mentStXjrkDiff[3], digits = 2)`, `r round(model_fixef$m2.1.mentStXjrkDiff[4], digits =2)`]), under haloperidol, this negative effect was diminished ($\mathbb{E}_{jerkDiff,mentalVSnon-mental,HALvsPLA}$ = `r round(model_fixef$m2.1.drugXmentStXjrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.1.drugXmentStXjrkDiff[3], digits = 2)`, `r round(model_fixef$m2.1.drugXmentStXjrkDiff[4], digits = 2)`], P($\mathbb{E}_{jerkDiff,mentalVSnon-mental,HALvsPLA}$>0) = `r round(post_drugXmentStXjrkDiff, digits = 2)`). Separate post-hoc models for placebo and haloperidol trials confirmed this pattern, with a robust negative effect of jerk difference for mental-, but not non-mental state animations in the placebo model (Model 2.2: $\mathbb{E}_{PLA,jerkDiff,non-mental}$ = `r round(model_fixef$m2.2.jrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.2.jrkDiff[3], digits = 2)`, `r round(model_fixef$m2.2.jrkDiff[4], digits = 2)`]; $\mathbb{E}_{PLA,jerkDiff,mentalVSnon-mental}$ = `r round(model_fixef$m2.2.mentStXjrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.2.mentStXjrkDiff[3], digits = 2)`, `r round(model_fixef$m2.2.mentStXjrkDiff[4], digits = 2)`]), and no effect of jerk difference in either mental state condition in the haloperidol model (Model 2.3: $\mathbb{E}_{HAL,jerkDiff,non-mental}$ = `r round(model_fixef$m2.3.jrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.3.jrkDiff[3], digits = 2)`, `r round(model_fixef$m2.3.jrkDiff[4], digits = 2)`]; $\mathbb{E}_{HAL,jerkDiff,mentalVSnon-mental}$ = `r round(model_fixef$m2.3.mentStXjrkDiff[1], digits = 2)`, CrI = [`r round(model_fixef$m2.3.mentStXjrkDiff[3], digits = 2)`, `r round(model_fixef$m2.3.mentStXjrkDiff[4], digits = 2)`]. Consequently, under placebo, the higher the difference in jerk between an observer and the original animator of a given mental state animation, the less accurate the observer was in classifying that animation. Thus, the present placebo results are in line with our previous findings [@Schuster2021], this time emphasising a role for movement similarity in promoting inference from mental state animations. In contrast, under haloperidol, there was no such effect of movement similarity for the non-mental or the mental state animations (see Fig. 2A-B). 
@@ -468,7 +466,7 @@ plot1 <- ggplot(data  = mainDat.PLA,
                        y = accuracy,
                        color = mentSt),
                    na.rm = TRUE) +
-  geom_point(size = 2,
+  geom_point(size = 1.1,
              alpha = .3,
              position = "jitter",
              na.rm = TRUE) + 
@@ -494,7 +492,7 @@ plot2 <- ggplot(data  = mainDat.HAL,
                        y = accuracy,
                        color = mentSt),
                    na.rm = TRUE) +
-  geom_point(size = 2,
+  geom_point(size = 1.1,
              alpha = .3,
              position = "jitter",
              na.rm = TRUE) + 
@@ -520,7 +518,7 @@ plot3 <- ggplot(data  = mainDat.HAL,
                        y = accuracy,
                        color = mentSt),
                    na.rm = TRUE) +
-  geom_point(size = 2,
+  geom_point(size = 1.1,
              alpha = .3,
              position = "jitter",
              na.rm = TRUE) + 
@@ -543,7 +541,7 @@ plot3 <- ggplot(data  = mainDat.HAL,
 plot1 + guide_area() + plot2 + plot3 + 
   plot_layout(guides = 'collect')
 
-ggsave("Figure_2.png", bg="white", height = 4.5 , width = 4.5 * 1.6)
+ggsave("Figure_2.tiff", device = "tiff", bg="white", height = 4.5 , width = 4.5 * 1.6, dpi = 300)
 ```
 
 ```{r model3, echo=FALSE, warning=FALSE, cache=TRUE, cache.lazy = FALSE, include=FALSE}
@@ -611,8 +609,8 @@ anim.diff = list()
 ``` {r figure-3, fig.cap='Relationship between drug effects on animations task performance and emotion recognition performance.', fig.width=4.5*1.6, fig.height=4.5, dpi=300, echo=FALSE, cache=TRUE, warning=FALSE}
 
 library(grid)
-text_more <- textGrob("more\naccurate", gp=gpar(fontsize=12, fontface="bold"))
-text_less <- textGrob("less\naccurate", gp=gpar(fontsize=12, fontface="bold"))
+text_more <- textGrob("more\naccurate", gp=gpar(fontsize=10, fontface="bold"))
+text_less <- textGrob("less\naccurate", gp=gpar(fontsize=10, fontface="bold"))
 
 Figure_3 <- ggplot(data  = diffDat,
                  aes(x = PLWallDiff,
@@ -635,9 +633,9 @@ Figure_3 <- ggplot(data  = diffDat,
     cex.lab = 1,
     na.rm = TRUE) +
     # choose colour palette and filter out NaNs
-  scale_color_brewer(name="Condition", 
-                     labels=c("non-mental","mental"), 
-                     palette = "Accent", na.translate = F) + 
+    scale_color_manual(name="Condition",
+                       labels = c("non-mental","mental"), 
+                       values = colours, na.translate = FALSE) +
   theme(plot.title = element_text(hjust = 0.5, size = 18, face = "bold")) +
       # add space below x-axis and annotate text
     theme(plot.margin = unit(c(1,1,2,1), "lines")) +
@@ -648,7 +646,7 @@ Figure_3 <- ggplot(data  = diffDat,
     
 Figure_3
 
-ggsave("Figure_3.png", bg="white", height = 4.5 , width = 4.5 * 1.6)
+ggsave("Figure_3.tiff", device = "tiff", bg="white", height = 4.5 , width = 4.5 * 1.6, dpi = 300)
 ```
 
 ```{r model4, echo=FALSE, warning=FALSE, cache=TRUE, cache.lazy = FALSE, include=FALSE}
